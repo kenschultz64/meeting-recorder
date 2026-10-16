@@ -1,0 +1,47 @@
+Meeting Recorder — third-party notices
+======================================
+
+This project's own source code is licensed under the Apache License, Version 2.0
+(see LICENSE).
+
+It bundles no AI model weights and no credentials. It calls services you run
+yourself, and it depends on the following third-party components. If you deploy
+it, you are responsible for complying with each of these licenses.
+
+Python packages (installed via requirements.txt / requirements-diarization.txt)
+------------------------------------------------------------------------------
+Django                     BSD-3-Clause
+Celery                     BSD-3-Clause
+redis-py                   MIT
+requests                   Apache-2.0
+NeMo Toolkit (ASR extras)  Apache-2.0
+PyTorch                    BSD-3-Clause
+NumPy                      BSD-3-Clause
+soundfile                  BSD-3-Clause
+hydra-core                 MIT
+antlr4-python3-runtime     BSD-3-Clause
+Bootstrap 5 (via CDN)      MIT
+
+AI models (downloaded separately, not distributed here)
+-------------------------------------------------------
+NVIDIA Nemotron-3-Diarization
+    Speaker diarization, up to 8 speakers. License: OpenMDW-1.1
+    (permissive; commercial use permitted). Attribution to NVIDIA required.
+NVIDIA Parakeet TDT 0.6B (v2/v3)
+    Speech-to-text, served over HTTP by a separate Parakeet service.
+    License: CC-BY-4.0 (commercial use permitted; attribution required).
+Any OpenAI-compatible LLM you point LLM_URL at
+    Governed by that model's own license, not by this project.
+
+External utilities
+------------------
+ffmpeg / ffprobe           LGPL/GPL depending on the build - invoked as separate
+                           programs, not linked into this code.
+gog CLI (optional)         Private utility used for the Google Drive export;
+                           not included here. The Drive button simply errors if
+                           it is absent.
+
+Documentation assets
+--------------------
+docs/meeting-recorder-guide.pdf and .html are original work by Crosswinds Church
+and are covered by the same Apache-2.0 license as the code.

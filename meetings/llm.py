@@ -34,4 +34,6 @@ def summarize_transcript(title: str, transcript: dict) -> str:
     try:
         return _chat(settings.LLM_URL, settings.LLM_MODEL, prompt)
     except Exception:
-        return _chat(settings.LLM_FALLBACK_URL, settings.LLM_FALLBACK_MODEL, prompt)
+        if getattr(settings, "LLM_FALLBACK_URL", ""):
+            return _chat(settings.LLM_FALLBACK_URL, settings.LLM_FALLBACK_MODEL, prompt)
+        raise

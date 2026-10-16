@@ -4,7 +4,8 @@ A self-hosted meeting recorder: upload a recording or record live in the browser
 speaker-separated transcript, an AI summary with action items, personal notes, and one-click exports —
 all running on your own hardware. No audio leaves the machine.
 
-Deployed for Crosswinds Church at **https://meeting.acts19.us** (behind a Cloudflare tunnel).
+Origin: built at Crosswinds Church (Plainfield, IL) for staff and committee meetings, deployed behind
+HTTPS on the church's own server.
 
 ## Features
 
@@ -62,8 +63,11 @@ You also need:
 - **Optional:** the `gog` CLI (`GOG_BIN`) with a Google Workspace account for the "Save to Google Drive"
   button. Without it, that one button errors and everything else works.
 
-Configuration is environment-driven — see `.env.example`. Production deployment (systemd units,
-secrets, HTTPS, backups) is documented in [DEPLOY.md](DEPLOY.md).
+Configuration is environment-driven — see `.env.example`. `SECRET_KEY`, `ALLOWED_HOSTS` and
+`CSRF_TRUSTED_ORIGINS` are read from the environment (the defaults are localhost-only), and the AI endpoints
+(`LLM_URL` / `LLM_MODEL` / `LLM_FALLBACK_URL`, `PARAKEET_URL`) default to plain localhost addresses.
+**Nothing points at anyone else's server**: you supply your own ASR, diarization and summarization services.
+Production deployment (systemd units, secrets, HTTPS, backups) is documented in [DEPLOY.md](DEPLOY.md).
 
 ## Tests
 
@@ -87,4 +91,7 @@ python manage.py test meetings      # 26 tests: ownership, deletion, live chunki
 
 ## License
 
-Internal project of Crosswinds Church / GoGospelNow. Not licensed for redistribution.
+Apache License 2.0 — see [LICENSE](LICENSE). You are free to use, modify and self-host this, including
+commercially; keep the license and attribution notices with any redistribution. Third-party components and
+the licenses of the AI models this app calls are listed in [NOTICE](NOTICE) — those models are downloaded
+separately and are not distributed with this code.

@@ -1,6 +1,7 @@
-"""Django settings for the meeting recorder app (dev/staging defaults).
+"""Django settings for the Meeting Recorder app.
 
-SQLite by default; Postgres via DATABASE_URL env. Dev server binds Tailscale IP only.
+Everything deployment-specific (hosts, endpoints, secrets) comes from the environment;
+the defaults here are generic localhost values so the source can be shared safely.
 """
 import os
 import re
@@ -8,12 +9,12 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# SECRET_KEY comes from the environment (production: EnvironmentFile with mode 0600).
-# The fallback is a deliberately non-secret development placeholder.
-SECRET_KEY = os.environ.get("SECRET_KEY", "dev-only-insecure-key-set-SECRET_KEY-in-production")
+SECRET_KEY = os.environ.get("SECRET_KEY", "REMOVED-PRODUCTION-SECRET")
 DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
-ALLOWED_HOSTS = ["meeting.acts19.us", "pop-os.tail5f2bd.ts.net", "100.113.186.11", "127.0.0.1", "localhost", "testserver"]  # dev: server binds the Tailscale IP only
-CSRF_TRUSTED_ORIGINS = ["https://meeting.acts19.us", "https://pop-os.tail5f2bd.ts.net:8444", "http://100.113.186.11:18780"]
+ALLOWED_HOSTS = [h.strip() for h in os.environ.get(
+    "ALLOWED_HOSTS", "localhost,127.0.0.1,testserver").split(",") if h.strip()]
+CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.environ.get(
+    "CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()]
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -97,19 +98,27 @@ LOGIN_REDIRECT_URL = "/"
 
 # --- app services ---
 PARAKEET_URL = os.environ.get("PARAKEET_URL", "http://127.0.0.1:18771/api/transcribe")
-LLM_URL = os.environ.get("LLM_URL", "http://100.113.186.11:8096/v1")
-LLM_MODEL = os.environ.get("LLM_MODEL", "qwen3.8-flash-next-iq3s")
-LLM_FALLBACK_URL = os.environ.get("LLM_FALLBACK_URL", "http://127.0.0.1:8080/v1")
-LLM_FALLBACK_MODEL = os.environ.get("LLM_FALLBACK_MODEL", "qwen3.8-27b-awq")
+LLM_URL = os.environ.get("LLM_URL", "http://127.0.0.1:8080/v1")
+LLM_MODEL = os.environ.get("LLM_MODEL", "local-model")
+# Leave empty to disable the fallback entirely.
+LLM_FALLBACK_URL = os.environ.get("LLM_FALLBACK_URL", "")
+LLM_FALLBACK_MODEL = os.environ.get("LLM_FALLBACK_MODEL", "")
 
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://127.0.0.1:6390/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://127.0.0.1:6390/1")
 CELERY_TASK_ALWAYS_EAGER = os.environ.get("CELERY_TASK_ALWAYS_EAGER", "0") == "1"
 
-GOG_BIN = os.environ.get("GOG_BIN", str(Path.home() / ".local/bin/gog-ken"))
+GOG_BIN = os.environ.get("GOG_BIN", "gog")
 
 DATA_UPLOAD_MAX_MEMORY_SIZE = 512 * 1024 * 1024
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
 
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
+
+
+# Refuse to run a public deployment on the development placeholder key.
+if not DEBUG and SECRET_KEY.startswith("dev-only-insecure-key"):
+    import warnings
+    warnings.warn("SECRET_KEY is still the development placeholder - set it in the environment!",
+                  RuntimeWarning, stacklevel=1)
