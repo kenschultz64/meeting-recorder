@@ -249,7 +249,7 @@ def download_transcript(request, pk, fmt):
 
 @login_required
 def send_to_gdrive(request, pk):
-    """Send transcript (+summary) to Google Drive via gog-ken."""
+    """Send transcript (+summary) to Google Drive via the gog CLI."""
     m = _owned(request, pk)
     if not m.transcript_json:
         messages.error(request, "No transcript yet.")

@@ -50,7 +50,7 @@ def summarize_meeting(self, meeting_id: int):
 
 
 def gog(*args: str) -> str:
-    """Run the gog-ken wrapper, return stdout; raise on failure."""
+    """Run the gog CLI, return stdout; raise on failure."""
     r = subprocess.run([settings.GOG_BIN, *args, "--no-input"],
                        capture_output=True, text=True, timeout=120)
     if r.returncode != 0:
