@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% block content %}
+<h4>New meeting</h4>
+<div class="card"><div class="card-body">
+<form method="post" enctype="multipart/form-data" id="upForm">{% csrf_token %}
+  <div class="mb-3">
+    <label class="form-label">Title</label>
+    <input name="title" class="form-control" placeholder="e.g. Deacons meeting — Oct 16">
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Audio file</label>
+    <input name="audio" type="file" class="form-control" accept="audio/*,video/*" required>
+    <div class="form-text">MP3, M4A, WAV, OGG, webm… anything ffmpeg reads. Phone voice memos and Zoom recordings work.</div>
+  </div>
+  <div class="mb-3 border rounded p-3 bg-white">
+    <label class="form-label fw-bold">🎤 Or record live right now</label>
+    <div class="d-flex gap-2 align-items-center mb-2">
+      <button type="button" id="recBtn" class="btn btn-danger">● Start recording</button>
+      <span id="recStatus" class="text-muted small">Not recording</span>
+    </div>
+    <audio id="recPreview" controls class="w-100 d-none" style="height:36px"></audio>
+    <div id="liveBox" class="d-none mt-2">
+      <div class="fw-bold small mb-1">Live transcript preview</div>
+      <div id="liveTranscript" class="border rounded bg-white p-2" style="max-height:260px;overflow-y:auto;font-size:.9rem"></div>
+    </div>
+  </div>
+  <button class="btn btn-primary" id="submitBtn">Upload &amp; transcribe</button>
+  <a class="btn btn-outline-secondary" href="{% url 'meeting_list' %}">Cancel</a>
+</form>
+</div></div>
+
+<script>
+let mediaRecorder = null, chunks = [], recordedBlob = null;
+let liveMeetingId = null, chunkSeq = 0, pollTimer = null, recStart = 0;
+const recBtn = document.getElementById('recBtn');
+const recStatus = document.getElementById('recStatus');
+const recPreview = document.getElementById('recPreview');
+const fileInput = document.querySelector('input[name=audio]');
+
+recBtn.addEventListener('click', async () => {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    chunks = [];
+    clearInterval(pollTimer);
+    liveMeetingId = null; chunkSeq = 0; chunkWarned = false;
+    document.getElementById('liveTranscript').replaceChildren();
+    document.getElementById('liveTranscript').dataset.last = 0;
+    await startLive();
+    document.getElementById('submitBtn').disabled = true;
+    const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/mp4';
+    mediaRecorder = new MediaRecorder(stream, {mimeType: mime});
+    mediaRecorder.ondataavailable = e => chunks.push(e.data);
+    let previewRecorder, previewTimer;
+    let previewRunning = true;
+    const meetingId = liveMeetingId;
+    function previewSegment() {
+      const parts = [];
+      const start = (Date.now() - recStart) / 1000;
+      const seq = ++chunkSeq;
+      previewRecorder = new MediaRecorder(stream, {mimeType: mime});
+      previewRecorder.ondataavailable = e => { if (e.data.size) parts.push(e.data); };
+      previewRecorder.onstop = async () => {
+        // Every stopped recorder emits a COMPLETE container with its own header.
+        // The separate main recorder remains uninterrupted for the saved audio.
+        if (previewRunning) previewSegment();
+        if (!parts.length || !meetingId) return;
+        const fd = new FormData();
+        fd.append('chunk', new Blob(parts, {type:mime}), `preview-${seq}.webm`);
+        fd.append('seq', seq);
+        fd.append('start', start);
+        fd.append('csrfmiddlewaretoken', document.querySelector('[name=csrfmiddlewaretoken]').value);
+        try {
+          const response = await fetch(`/meetings/${meetingId}/live-chunk/`, {method:'POST', body:fd});
+          const result = await response.json();
+          if (!response.ok || !result.ok) noteChunkProblem(response.status, result.error);
+        } catch (err) { noteChunkProblem(0, err.message); }
+      };
+      previewRecorder.start();
+      previewTimer = setTimeout(() => previewRecorder.stop(), 10000);
+    }
+    mediaRecorder.onstop = () => {
+      previewRunning = false;
+      clearTimeout(previewTimer);
+      if (previewRecorder && previewRecorder.state === 'recording') previewRecorder.stop();
+      stream.getTracks().forEach(t => t.stop());
+      document.getElementById('submitBtn').disabled = false;
+      recordedBlob = new Blob(chunks, {type: mime});
+      recPreview.src = URL.createObjectURL(recordedBlob);
+      recPreview.classList.remove('d-none');
+      recBtn.textContent = '● Start recording';
+      recBtn.className = 'btn btn-danger';
+      recStatus.textContent = `Recorded ${(recordedBlob.size/1024/1024).toFixed(1)} MB — press "Upload & transcribe" (or re-record).`;
+      const dt = new DataTransfer();
+      const ext = mime.includes('webm') ? 'webm' : 'm4a';
+      dt.items.add(new File([recordedBlob], `live-recording-${Date.now()}.${ext}`, {type: mime}));
+      fileInput.files = dt.files;
+    };
+    recStart = Date.now();
+    mediaRecorder.start(1000);
+    previewSegment();
+    recBtn.textContent = '■ Stop';
+    recBtn.className = 'btn btn-secondary';
+    const t0 = Date.now();
+    const tick = setInterval(() => {
+      if (!mediaRecorder || mediaRecorder.state !== 'recording') { clearInterval(tick); return; }
+      const s = Math.floor((Date.now()-t0)/1000);
+      recStatus.textContent = `🔴 Recording… ${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+    }, 500);
+  } catch (err) {
+    recStatus.textContent = 'Mic error: ' + err.message + ' — browser needs HTTPS or localhost for mic access.';
+  }
+});
+
+// ---- live preview: create the meeting row immediately, then poll for transcript chunks ----
+async function startLive() {
+  try {
+    const title = document.querySelector('input[name=title]').value || 'Live recording';
+    const fd = new FormData();
+    fd.append('title', title);
+    fd.append('live', '1');
+    fd.append('csrfmiddlewaretoken', document.querySelector('[name=csrfmiddlewaretoken]').value);
+    const r = await fetch('{% url "meeting_new" %}', {method: 'POST', body: fd, headers: {'X-Requested-With': 'XMLHttpRequest'}});
+    liveMeetingId = r.headers.get('X-Meeting-Id');
+    if (!liveMeetingId) return;  // preview unavailable; full transcription still runs on upload
+    document.getElementById('liveBox').classList.remove('d-none');
+    pollTimer = setInterval(pollLive, 4000);
+  } catch (e) { /* preview is best-effort */ }
+}
+
+let chunkWarned = false;
+function noteChunkProblem(status, err) {
+  console.warn('live chunk rejected', status, err);
+  if (!chunkWarned) {
+    chunkWarned = true;
+    const box = document.getElementById('liveTranscript');
+    const div = document.createElement('div');
+    div.className = 'text-muted small';
+    div.textContent = '\u26a0\ufe0f Live preview hiccup (' + (err || 'upload failed') +
+      ') \u2014 the full transcript will still be generated after you stop.';
+    box.appendChild(div);
+  }
+}
+
+async function pollLive() {
+  if (!liveMeetingId) return;
+  const box = document.getElementById('liveTranscript');
+  const last = Number(box.dataset.last || 0);
+  try {
+    const r = await fetch(`/meetings/${liveMeetingId}/live/?after=${last}`);
+    const data = await r.json();
+    for (const s of data.segments) {
+      const div = document.createElement('div');
+      div.className = 'seg';
+      const spk = s.speaker || 'speaker…';
+      const num = (spk.match(/\d/) || [0])[0];
+      div.textContent = `${Math.round(s.start)}s: ${s.text}`;
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
+      box.dataset.last = s.seq;
+    }
+  } catch (e) { /* transient */ }
+}
+
+// if a live session is active, the final submit reuses that meeting row instead of creating a new one
+document.getElementById('upForm').addEventListener('submit', async (e) => {
+  if (!liveMeetingId) return;
+  e.preventDefault();
+  const form = e.target;
+  const fd = new FormData(form);
+  fd.append('final_for', liveMeetingId);
+  const r = await fetch('{% url "meeting_new" %}', {method: 'POST', body: fd, headers: {'X-Requested-With': 'XMLHttpRequest'}});
+  if (r.ok) { location.href = `/meetings/${liveMeetingId}/`; }
+  else { form.submit(); }
+});
+</script>
+{% endblock %}

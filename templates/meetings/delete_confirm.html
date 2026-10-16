@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card border-danger"><div class="card-header text-danger fw-bold">🗑 Delete meeting</div>
+<div class="card-body">
+  <p>Permanently delete <strong>{{ m.title }}</strong>? This removes the audio, transcript,
+  notes, summary and export records. This cannot be undone.</p>
+  <form method="post" class="d-flex gap-2">{% csrf_token %}
+    <button class="btn btn-danger">Yes, delete it</button>
+    <a class="btn btn-outline-secondary" href="{% url 'meeting_detail' m.pk %}">Cancel</a>
+  </form>
+</div></div>
+{% endblock %}

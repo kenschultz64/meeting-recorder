@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}{{ m.title }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-3">
+  <div>
+    <h4 class="mb-1">{{ m.title }}</h4>
+    <div class="text-muted small">
+      {{ m.get_status_display }}
+      {% if m.duration_sec %} · {{ m.duration_sec|floatformat:0 }}s{% endif %}
+      · uploaded {{ m.created_at|date:"M j, Y H:i" }}
+    </div>
+  </div>
+  <div class="d-flex gap-2">
+    <a class="btn btn-sm btn-outline-secondary" href="{% url 'meeting_list' %}">← All meetings</a>
+    <a class="btn btn-sm btn-outline-danger" href="{% url 'delete_meeting' m.pk %}">🗑 Delete</a>
+  </div>
+</div>
+
+{% if m.status == 'processing' %}
+  <div class="alert alert-info">⏳ Transcribing… this page refreshes automatically.</div>
+  <script>setTimeout(() => location.reload(), 5000);</script>
+{% elif m.status == 'failed' %}
+  <div class="alert alert-danger">Failed: {{ m.error }}</div>
+{% endif %}
+
+{% if speaker_ceiling %}
+<div class="alert alert-warning">
+  <b>This recording has {{ diarizer_max }} different voices — the most the speaker separation can tell apart.</b>
+  If more than {{ diarizer_max }} people spoke, a few may be grouped under the same label. The words are all still
+  transcribed; if a label mixes two people, name it for the one who talked most.
+</div>
+{% endif %}
+{% if transcript %}
+<div class="card mb-4"><div class="card-header">Name speakers</div><div class="card-body">
+<p>Listen to a sample, enter each person's name, then save. Leave a name blank to keep the original label.</p>
+<form method="post" action="{% url 'name_speakers' m.pk %}">{% csrf_token %}
+{% for speaker in speakers %}
+<div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+<label for="name-{{ forloop.counter }}">{{ speaker.key }}</label>
+<input id="name-{{ forloop.counter }}" name="speaker_{{ speaker.key }}" value="{{ speaker.name }}" maxlength="100" class="form-control" style="max-width:280px" placeholder="Person's name">
+{% if m.audio %}<button type="button" class="btn btn-outline-secondary speaker-sample" data-start="{{ speaker.start }}" data-end="{{ speaker.end }}">Play sample</button>{% endif %}
+</div>{% endfor %}
+<button class="btn btn-primary">Save speaker names</button>
+</form></div></div>
+<div class="card mb-4"><div class="card-header d-flex justify-content-between align-items-center">
+  <span>Transcript</span>
+  <div class="btn-group btn-group-sm">
+    <button class="btn btn-outline-secondary" id="copyBtn"
+      data-transcript="{{ transcript_json_escaped|default:'' }}">📋 Copy</button>
+    <a class="btn btn-outline-secondary" href="{% url 'download_transcript' m.pk 'txt' %}">⬇️ Download .txt</a>
+    <a class="btn btn-outline-secondary" href="{% url 'download_transcript' m.pk 'md' %}">⬇️ Download .md</a>
+    <a class="btn btn-success" href="{% url 'send_to_gdrive' m.pk %}">📤 Save to Google Drive</a>
+  </div>
+</div><div class="card-body" id="transcript">
+  {% for s in transcript %}
+    <div class="seg"><span class="ts">{{ s.start|floatformat:1 }}s</span>
+      <strong class="speaker-{{ s.speaker|slice:':1'|default:0 }}">{{ s.speaker }}</strong>: {{ s.text }}</div>
+  {% endfor %}
+</div></div>
+
+<div class="card mb-4"><div class="card-header d-flex justify-content-between">
+  <span>Summary</span>
+  <a class="btn btn-sm btn-primary" href="{% url 'do_summary' m.pk %}">✨ Summarize with AI</a>
+</div><div class="card-body"><pre style="white-space:pre-wrap">{{ m.summary|default:"No summary yet — click Summarize." }}</pre></div></div>
+{% endif %}
+
+<div class="card mb-4"><div class="card-header">Notes</div><div class="card-body">
+  {% for n in notes %}<div class="mb-2">• {{ n.text }} <span class="text-muted small">({{ n.created_at|date:"H:i" }})</span></div>{% endfor %}
+  <form method="post" action="{% url 'add_note' m.pk %}" class="d-flex gap-2 mt-2">{% csrf_token %}
+    <input name="text" class="form-control" placeholder="Add a note…" required>
+    <button class="btn btn-outline-primary">Add</button>
+  </form>
+</div></div>
+
+{% if exports %}
+<div class="card"><div class="card-header">Export history</div><ul class="list-group list-group-flush">
+  {% for e in exports %}<li class="list-group-item small">{{ e.get_kind_display }} → {{ e.target }} <span class="text-muted">({{ e.created_at|date:"M j H:i" }})</span></li>{% endfor %}
+</ul></div>
+{% endif %}
+
+{% if m.audio %}<audio id="meetingAudio" controls src="{{ m.audio.url }}" class="w-100 mt-3"></audio>{% endif %}
+
+<script>
+const meetingAudio = document.getElementById('meetingAudio');
+let sampleEnd = null;
+document.querySelectorAll('.speaker-sample').forEach(button => button.addEventListener('click', async () => {
+  sampleEnd = Number(button.dataset.end);
+  meetingAudio.currentTime = Number(button.dataset.start);
+  try { await meetingAudio.play(); } catch (e) { sampleEnd = null; }
+}));
+meetingAudio?.addEventListener('timeupdate', () => {
+  if (sampleEnd !== null && meetingAudio.currentTime >= sampleEnd) { meetingAudio.pause(); sampleEnd = null; }
+});
+document.getElementById('copyBtn')?.addEventListener('click', async () => {
+  const text = document.getElementById('transcript').innerText;
+  await navigator.clipboard.writeText(text);
+  document.getElementById('copyBtn').textContent = '✅ Copied';
+});
+</script>
+{% endblock %}

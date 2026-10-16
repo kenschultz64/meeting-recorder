@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0">👥 Users</h4>
+  <a class="btn btn-sm btn-outline-secondary" href="{% url 'meeting_list' %}">← Meetings</a>
+</div>
+
+<div class="card mb-4"><div class="table-responsive"><table class="table mb-0">
+  <thead><tr><th>Username</th><th>Meetings</th><th>Joined</th><th>Last login</th><th>Actions</th></tr></thead>
+  <tbody>
+  {% for entry in users %}
+    <tr>
+      <td>{{ entry.u.username }}{% if u.u.is_superuser %} <span class="badge bg-dark">admin</span>{% endif %}</td>
+      <td>{{ entry.n }}</td>
+      <td class="small text-muted">{{ entry.u.date_joined|date:"M j, Y" }}</td>
+      <td class="small text-muted">{{ entry.u.last_login|date:"M j, Y H:i"|default:"never" }}</td>
+      <td>
+        <form method="post" action="{% url 'user_set_password' entry.u.pk %}" class="d-inline-flex gap-1">
+          {% csrf_token %}
+          <input type="password" name="password" class="form-control form-control-sm" style="width:140px" placeholder="new password">
+          <button class="btn btn-sm btn-outline-primary">Set password</button>
+        </form>
+        {% if u.pk != request.user.pk %}
+        <form method="post" action="{% url 'user_delete' entry.u.pk %}" class="d-inline"
+              onsubmit="return confirm('Delete {{ entry.u.username }}? Their meetings stay but become unowned.');">
+          {% csrf_token %}
+          <button class="btn btn-sm btn-outline-danger">Delete</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div></div>
+
+<div class="card"><div class="card-header">➕ Add a person</div><div class="card-body">
+  <form method="post" action="{% url 'user_create' %}" class="d-flex gap-2 flex-wrap">
+    {% csrf_token %}
+    <input name="username" class="form-control" style="max-width:220px" placeholder="username (e.g. natasha)" required>
+    <input type="text" name="password" class="form-control" style="max-width:260px" placeholder="password you'll give them" required>
+    <button class="btn btn-primary">Create account</button>
+  </form>
+  <div class="form-text mt-2">Each person sees only their own meetings. Passwords must be at least 8 characters.</div>
+</div></div>
+{% endblock %}

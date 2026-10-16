@@ -1,0 +1,5 @@
+# Runtime dependencies for the Meeting Recorder web app + Celery worker.
+Django==5.2.18
+celery==5.6.3
+redis==8.1.0
+requests==2.34.2

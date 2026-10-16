@@ -1,0 +1,7 @@
+# Speaker separation (runs inside the Celery worker, CPU-only).
+# Heavy: NeMo pulls torch + the audio stack. Install only where diarization runs.
+# The shipped deployment runs NeMo built from git (3.1.0+218d0b443) with CPU torch.
+nemo_toolkit[asr]==3.1.0
+torch==2.14.1
+numpy==2.2.6
+soundfile==0.14.0

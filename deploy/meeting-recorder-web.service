@@ -1,0 +1,14 @@
+[Unit]
+Description=Meeting Recorder web app
+After=network-online.target docker.service
+Wants=docker.service
+
+[Service]
+EnvironmentFile=%h/.config/meeting-recorder.env
+WorkingDirectory=%h/meeting-recorder
+ExecStart=%h/meeting-recorder/.venv/bin/python manage.py runserver 0.0.0.0:18780 --noreload
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
