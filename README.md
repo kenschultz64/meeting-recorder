@@ -1,97 +1,92 @@
 # GoGospelNow.com Meeting Recorder
 
-A self-hosted meeting recorder: upload a recording or record live in the browser, and get a
-speaker-separated transcript, an AI summary with action items, personal notes, and one-click exports —
-all running on your own hardware. No audio leaves the machine.
-
-Origin: built at Crosswinds Church (Plainfield, IL) for staff and committee meetings, deployed behind
-HTTPS on the church's own server.
+A self-hosted web application that records or uploads meetings, transcribes them locally, separates up to eight speakers, creates AI-assisted minutes, and exports the results. It was built by Crosswinds Church for staff and committee meetings.
 
 ## Features
 
-- **Upload or record** — MP3, M4A, WAV, OGG, WebM and video files, or record straight from the browser
-  (phone or desktop; needs HTTPS for microphone access).
-- **Live transcript preview** — text appears roughly every 10 seconds *while* you are still recording,
-  from short preview clips sent in parallel with the uninterrupted full recording.
-- **Speaker separation** — up to 8 speakers per recording; the meeting page warns when that ceiling is
-  reached because extra voices get folded into existing labels.
-- **Speaker naming** — give each voice a real name after the fact (sample playback included); names flow
-  into the transcript, downloads, and summaries.
-- **AI summary** — Key Points, Decisions Made, Action Items (who / what / when), Open Questions.
-- **Notes**, **copy**, **download .txt / .md**, **save to Google Drive**, click-to-seek timestamps.
-- **Per-user accounts** — admin-created, no self sign-up; each user only ever sees their own meetings.
-- **Built-in user guide** — the `Docs` button downloads the illustrated PDF in `docs/`.
+- Upload MP3, M4A, WAV, OGG, WebM, or video files, or record in the browser.
+- Preview transcription in roughly 10-second intervals while recording.
+- Recover server-persisted recording chunks after a closed tab or interrupted upload.
+- Separate and name up to eight speakers with NVIDIA Nemotron-3-Diarization.
+- Create notes and optional AI summaries with any OpenAI-compatible language-model endpoint.
+- Copy or download TXT/Markdown transcripts and optionally export to Google Drive.
+- Admin-created accounts with strict per-user meeting and audio ownership.
+- Light/dark themes, microphone selection, input meter, and local test recording.
+- Illustrated PDF guide available from the in-app **Docs** button.
+
+## Supported platforms
+
+**Server (official):** x86-64 Ubuntu 22.04/24.04, Debian 12, and Pop!_OS 22.04/24.04.
+
+**Experimental:** Ubuntu under WSL2 with systemd enabled. Native Windows and macOS server installations are not currently supported because the verified NeMo diarization stack and service manager are Linux-specific.
+
+**Clients:** any current Chrome, Edge, Firefox, or Safari browser on Windows, macOS, Linux, Android, or iOS. Microphone recording requires HTTPS (or localhost).
+
+See [INSTALL.md](INSTALL.md) for the complete support matrix, hardware requirements, and installation choices.
+
+## Install tool
+
+The repository includes a guarded installer. It checks the operating system and prerequisites, creates an isolated Python environment, generates a private configuration file, migrates the database, installs hardened user services, and runs a diagnostic.
+
+```bash
+git clone https://github.com/kenschultz64/meeting-recorder.git
+cd meeting-recorder
+./install.sh --check
+./install.sh --with-asr-container --hostname meeting.example.org
+```
+
+`--with-asr-container` starts an optional loopback-only Parakeet TDT v3 service through Docker. If you already run a compatible ASR endpoint, use `--asr-url URL` instead. AI summaries are optional; add `--llm-url URL --llm-model NAME` to enable them.
+
+The installer never publishes a port or configures DNS/TLS. Put the loopback-only web service behind your own HTTPS reverse proxy, Tailscale Serve, or Cloudflare Tunnel.
 
 ## Architecture
 
-```
-browser ──HTTPS──> reverse proxy / tunnel ──> Django (runserver|gunicorn) :18780
-                                                   │
-                          Redis :6390  ── Celery worker ──> Parakeet ASR (HTTP, CPU)
-                                                   │          └─> Nemotron-3 diarization (in-process, CPU)
-                                                   └─> OpenAI-compatible LLM (summaries)
-```
-
-- SQLite by default; PostgreSQL if `DATABASE_URL` is set.
-- ASR is a plain HTTP call (`PARAKEET_URL`) to a Parakeet service — see `meetings/pipeline.py`.
-- Diarization runs inside the worker process with NVIDIA **Nemotron-3-Diarization** (Sortformer,
-  8 output channels, CPU) — see `meetings/pipeline.py::diarize`.
-- Summaries go to any OpenAI-compatible endpoint (`LLM_URL`, optional `LLM_FALLBACK_URL`).
-- Audio is served through an owner-only view (`private_audio`), never straight from `MEDIA_ROOT`.
-
-## Quick start (development)
-
-```bash
-python3 -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt
-pip install -r requirements-diarization.txt      # heavy: NeMo + CPU torch, only needed for diarization
-export SECRET_KEY=$(python -c "from django.core.management.utils import get_random_secret_key as g;print(g())")
-python manage.py migrate
-python manage.py createsuperuser                 # then create other users on the Users page
-python manage.py runserver 0.0.0.0:18780
+```text
+browser --HTTPS--> reverse proxy/tunnel --> Gunicorn/Django :18780 (loopback)
+                                                |
+                                  Redis :6390 --> Celery worker
+                                                |--> Parakeet ASR HTTP service
+                                                |--> Nemotron-3 diarization (local CPU)
+                                                `--> optional OpenAI-compatible LLM
 ```
 
-You also need:
-
-- **Redis** for the Celery queue (`docker compose -f deploy/redis.compose.yaml up -d`), and
-  `celery -A config worker -l info --concurrency 1` running alongside the web process.
-- **ffmpeg / ffprobe** on PATH (audio normalization and duration probing).
-- **A Parakeet ASR HTTP service** answering `POST /api/transcribe` with a multipart `file` field and
-  returning `{"segments": [{"start","end","text","words"}], ...}`. Point `PARAKEET_URL` at it.
-- **An OpenAI-compatible LLM** for summaries (`LLM_URL`, `LLM_MODEL`). Summaries are optional; the rest
-  of the app works without it. `LLM_FALLBACK_URL` is tried if the primary fails.
-- **Optional:** the `gog` CLI (`GOG_BIN`) with a Google Workspace account for the "Save to Google Drive"
-  button. Without it, that one button errors and everything else works.
-
-Configuration is environment-driven — see `.env.example`. `SECRET_KEY`, `ALLOWED_HOSTS` and
-`CSRF_TRUSTED_ORIGINS` are read from the environment (the defaults are localhost-only), and the AI endpoints
-(`LLM_URL` / `LLM_MODEL` / `LLM_FALLBACK_URL`, `PARAKEET_URL`) default to plain localhost addresses.
-**Nothing points at anyone else's server**: you supply your own ASR, diarization and summarization services.
-Production deployment (systemd units, secrets, HTTPS, backups) is documented in [DEPLOY.md](DEPLOY.md).
-
-## Tests
-
-```bash
-python manage.py test meetings      # 26 tests: ownership, deletion, live chunking, exports, docs, speaker ceiling
-```
+- SQLite is the default database; PostgreSQL can be selected with `DATABASE_URL` after installing `requirements-postgres.txt`.
+- Audio is served only through an authenticated owner-checking Django view—not directly from `MEDIA_ROOT`.
+- The bundled ASR option uses the MIT-licensed `parakeet.cpp` runtime with NVIDIA Parakeet TDT 0.6B v3 weights (CC-BY-4.0).
+- The app also accepts the original native `POST /api/transcribe` response or OpenAI-style verbose transcription JSON with word timestamps.
+- No production credentials, model weights, recordings, database, or private server addresses are included.
 
 ## Documentation
 
-- `docs/meeting-recorder-guide.pdf` — the illustrated user guide handed out by the in-app **Docs** button.
-- `docs/meeting-recorder-guide.html` — the source of that PDF (styled HTML, screenshots embedded).
-- `DEPLOY.md` — production install, hardening invariants, operational checks.
+- [INSTALL.md](INSTALL.md) — operating systems, hardware, automated and manual installation.
+- [DEPLOY.md](DEPLOY.md) — HTTPS, hardening, backups, upgrades, and operations.
+- [SECURITY.md](SECURITY.md) — vulnerability reporting and deployment security boundaries.
+- `docs/meeting-recorder-guide.pdf` — illustrated end-user guide shipped inside the app.
+- `.env.example` — complete configuration reference.
 
-## Notes and limitations
+## Development
 
-- Diarization tops out at **8 speakers** (model limit). Beyond that, words are still transcribed
-  correctly but some voices share a label.
-- Speaker naming is per speaker across the whole meeting; individual lines cannot be reassigned yet.
-- Deleting a meeting is permanent (audio, transcript, notes, exports).
-- A meeting-chat feature ("ask this meeting a question") is designed but not built.
+```bash
+python3 -m venv .venv
+.venv/bin/pip install --require-hashes -r requirements.lock
+export SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')"
+export DJANGO_DEBUG=1
+export DJANGO_SECURE_COOKIES=0
+.venv/bin/python manage.py migrate
+.venv/bin/python manage.py test meetings
+.venv/bin/python manage.py runserver 127.0.0.1:18780
+```
+
+This lightweight setup exercises the web application. Full transcription additionally needs Redis, a Celery worker, the diarization dependencies, ffmpeg, and a compatible ASR service; [INSTALL.md](INSTALL.md) documents those steps.
+
+## Limitations
+
+- Diarization is limited to eight speakers by the model. Additional voices may share an existing label.
+- Speaker names apply across an entire meeting; individual transcript passages cannot yet be reassigned.
+- SQLite is suitable for a small team. Use PostgreSQL for heavier concurrent use.
+- Deleting a meeting permanently removes its audio, transcript, notes, and export records.
+- The Google Drive button requires a separately installed and authenticated `gog` CLI.
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE). You are free to use, modify and self-host this, including
-commercially; keep the license and attribution notices with any redistribution. Third-party components and
-the licenses of the AI models this app calls are listed in [NOTICE](NOTICE) — those models are downloaded
-separately and are not distributed with this code.
+The application source and documentation are licensed under Apache-2.0; see [LICENSE](LICENSE). Third-party runtimes and model weights retain their own licenses and attribution requirements; see [NOTICE](NOTICE).

@@ -1,0 +1,118 @@
+<div class="mb-3">
+  <label for="micSelect" class="form-label">Microphone</label>
+  <select id="micSelect" class="form-select" aria-describedby="micHelp"><option value="">System default microphone</option></select>
+  <div id="micHelp" class="form-text">Test your microphone to allow access and see device names. Choose the microphone nearest the speakers.</div>
+  <button type="button" id="micTest" class="btn btn-outline-secondary mt-2">Test microphone (8 seconds)</button>
+  <div class="mt-2"><label for="micLevel" class="small">Input level</label>
+    <meter id="micLevel" class="w-100" min="0" max="100" value="0" aria-describedby="micLevelStatus">0</meter>
+    <div id="micLevelStatus" class="small text-muted" role="status">Meter activates during a test or recording.</div>
+  </div>
+  <div id="micTestStatus" class="form-text" role="status">Test audio stays in this browser; it is not uploaded or transcribed.</div>
+  <audio id="micTestPreview" controls class="w-100 d-none mt-2" aria-label="Microphone test playback"></audio>
+</div>
+<script>
+// Mic setup owns capture and metering, but never uploads test audio.
+const micSetup = (() => {
+  const select = document.getElementById('micSelect');
+  const button = document.getElementById('micTest');
+  const level = document.getElementById('micLevel');
+  const status = document.getElementById('micLevelStatus');
+  const testStatus = document.getElementById('micTestStatus');
+  const player = document.getElementById('micTestPreview');
+  let stream = null, context = null, frame = null, recorder = null;
+  let timeout = null, testURL = null, locked = false, generation = 0;
+  function lock(value) { locked = value; select.disabled = value; button.disabled = value; }
+  async function devices() {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    const selected = select.value;
+    const inputs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput');
+    select.replaceChildren(new Option('System default microphone', ''));
+    for (const [i, d] of inputs.entries()) if (d.deviceId) select.add(new Option(d.label || `Microphone ${i + 1}`, d.deviceId));
+    if ([...select.options].some(o => o.value === selected)) select.value = selected;
+  }
+  function release() {
+    generation++;
+    cancelAnimationFrame(frame);
+    frame = null;
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = null;
+    if (context) { context.close().catch(() => {}); context = null; }
+    level.value = 0;
+  }
+  function message(error) {
+    if (error.name === 'NotAllowedError') return 'Microphone permission denied. Allow microphone access in your browser and try again.';
+    if (error.name === 'NotFoundError' || error.name === 'OverconstrainedError') return 'Selected microphone is unavailable. Reconnect it or choose another microphone.';
+    if (error.name === 'NotReadableError') return 'Microphone cannot be opened. Check its connection and whether another app is using it.';
+    return 'Microphone error: ' + error.message;
+  }
+  async function capture() {
+    release();
+    player.pause();
+    document.getElementById('recPreview')?.pause();
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error('Microphone recording requires HTTPS and a supported browser.');
+    const current = generation;
+    const acquired = await navigator.mediaDevices.getUserMedia({audio: select.value ? {deviceId: {exact: select.value}} : true});
+    if (current !== generation) { acquired.getTracks().forEach(t => t.stop()); throw new Error('Microphone request cancelled.'); }
+    stream = acquired;
+    try { await devices(); } catch (_) { /* Device names are optional. */ }
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      context = new AudioContextClass();
+      await context.resume();
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 2048;
+      context.createMediaStreamSource(stream).connect(analyser);
+      const samples = new Float32Array(analyser.fftSize);
+      let lastUpdate = 0, clipUntil = 0;
+      function tick(now) {
+        analyser.getFloatTimeDomainData(samples);
+        let sum = 0, peak = 0;
+        for (const sample of samples) { sum += sample * sample; peak = Math.max(peak, Math.abs(sample)); }
+        const db = 20 * Math.log10(Math.max(Math.sqrt(sum / samples.length), 0.000001));
+        level.value = Math.max(0, Math.min(100, (db + 60) / 60 * 100));
+        if (peak >= 0.98) clipUntil = now + 1500;
+        if (now - lastUpdate >= 500) {
+          const text = now < clipUntil ? 'Too loud / possible clipping — lower device input level or move the microphone back.' : db < -40 ? 'Quiet or silent — speak normally; move closer if speech stays low.' : 'Healthy level — listen to the test for noise or distortion.';
+          if (status.textContent !== text) status.textContent = text;
+          lastUpdate = now;
+        }
+        frame = requestAnimationFrame(tick);
+      }
+      frame = requestAnimationFrame(tick);
+    } catch (_) { status.textContent = 'Level meter unavailable in this browser; use test playback to check the sound.'; }
+    return acquired;
+  }
+  button.addEventListener('click', async () => {
+    if (locked) return;
+    lock(true);
+    const recordButton = document.getElementById('recBtn');
+    const submitButton = document.getElementById('submitBtn');
+    recordButton.disabled = true; submitButton.disabled = true;
+    const restore = () => { release(); lock(false); recordButton.disabled = false; submitButton.disabled = false; };
+    try {
+      testStatus.textContent = 'Allow microphone access, then speak normally for eight seconds.';
+      const audio = await capture();
+      const parts = [];
+      recorder = new MediaRecorder(audio);
+      recorder.ondataavailable = event => { if (event.data.size) parts.push(event.data); };
+      recorder.onerror = () => { clearTimeout(timeout); testStatus.textContent = 'Test recording failed. Please try again.'; restore(); };
+      recorder.onstop = () => {
+        clearTimeout(timeout);
+        if (testURL) URL.revokeObjectURL(testURL);
+        testURL = URL.createObjectURL(new Blob(parts, {type: recorder.mimeType}));
+        player.src = testURL;
+        player.classList.remove('d-none');
+        testStatus.textContent = 'Test ready. Press Play and check that voices are clear. Nothing was uploaded.';
+        restore();
+      };
+      recorder.start();
+      testStatus.textContent = 'Recording an eight-second microphone test…';
+      timeout = setTimeout(() => { if (recorder.state === 'recording') recorder.stop(); }, 8000);
+    } catch (error) { testStatus.textContent = message(error); restore(); }
+  });
+  navigator.mediaDevices?.addEventListener('devicechange', () => { if (!locked) devices().catch(() => {}); });
+  window.addEventListener('pagehide', () => { clearTimeout(timeout); release(); if (testURL) URL.revokeObjectURL(testURL); });
+  devices().catch(() => {});
+  return {capture, release, lock, message};
+})();
+</script>

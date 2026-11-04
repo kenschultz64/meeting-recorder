@@ -3,9 +3,10 @@
 Ported from the verified P1 spike (spike/pipeline.py).
 """
 import subprocess
-import sys
+import shutil
+import tempfile
 import time
-import uuid
+import re
 from pathlib import Path
 
 import requests
@@ -44,9 +45,55 @@ def probe_duration(path: Path) -> float | None:
 
 def parakeet_transcribe(wav: Path) -> dict:
     with open(wav, "rb") as f:
-        r = requests.post(settings.PARAKEET_URL, files={"file": f}, timeout=1800)
+        r = requests.post(
+            settings.PARAKEET_URL,
+            files={"file": f},
+            data={"response_format": "verbose_json", "timestamp_granularities[]": "word"},
+            timeout=1800,
+        )
     r.raise_for_status()
-    return r.json()
+    return normalize_asr_response(r.json())
+
+
+def normalize_asr_response(payload: dict) -> dict:
+    """Normalize the native endpoint and OpenAI verbose-JSON ASR formats."""
+    segments = payload.get("segments") or []
+    if segments and any(segment.get("words") for segment in segments):
+        return payload
+
+    words = payload.get("words") or []
+    normalized_words = []
+    for item in words:
+        word = str(item.get("word") or item.get("w") or "").strip()
+        if not word:
+            continue
+        normalized_words.append({
+            "word": word,
+            "start": float(item.get("start", item.get("s", 0.0))),
+            "end": float(item.get("end", item.get("e", 0.0))),
+        })
+    if not normalized_words:
+        return payload
+
+    grouped = []
+    current = []
+    for word in normalized_words:
+        current.append(word)
+        duration = word["end"] - current[0]["start"]
+        if re.search(r"[.!?][\"')\]]?$", word["word"]) or duration >= 12.0:
+            grouped.append(current)
+            current = []
+    if current:
+        grouped.append(current)
+
+    payload = dict(payload)
+    payload["segments"] = [{
+        "start": group[0]["start"],
+        "end": group[-1]["end"],
+        "text": " ".join(word["word"] for word in group),
+        "words": group,
+    } for group in grouped]
+    return payload
 
 
 def get_diar_model():
@@ -97,8 +144,7 @@ def merge(asr: dict, diar: list) -> list:
 
 def transcribe_audio_file(audio_path: Path) -> dict:
     """Full pipeline for one audio file -> transcript dict."""
-    work = Path("/tmp") / f"mr_{uuid.uuid4().hex[:8]}"
-    work.mkdir()
+    work = Path(tempfile.mkdtemp(prefix="meeting-recorder-"))
     try:
         wav = normalize_wav(audio_path, work / "audio.wav")
         duration = probe_duration(wav)
@@ -113,13 +159,12 @@ def transcribe_audio_file(audio_path: Path) -> dict:
             "asr_seconds": round(time.time() - t0, 1),
         }
     finally:
-        subprocess.run(["rm", "-rf", str(work)])
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def transcribe_chunk_bytes(audio_bytes: bytes) -> str:
     """ASR a small webm chunk (no diarization) -> plain text for live preview."""
-    work = Path("/tmp") / f"mrc_{uuid.uuid4().hex[:8]}"
-    work.mkdir()
+    work = Path(tempfile.mkdtemp(prefix="meeting-recorder-chunk-"))
     try:
         src = work / "chunk.webm"
         src.write_bytes(audio_bytes)
@@ -127,4 +172,4 @@ def transcribe_chunk_bytes(audio_bytes: bytes) -> str:
         asr = parakeet_transcribe(wav)
         return asr.get("text", "").strip()
     finally:
-        subprocess.run(["rm", "-rf", str(work)])
+        shutil.rmtree(work, ignore_errors=True)

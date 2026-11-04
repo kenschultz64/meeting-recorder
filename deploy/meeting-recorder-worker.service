@@ -1,14 +1,19 @@
 [Unit]
-Description=Meeting Recorder celery worker
-After=network-online.target docker.service
-Wants=docker.service
+Description=Meeting Recorder background worker
+After=network-online.target meeting-recorder-redis.service
+Wants=network-online.target meeting-recorder-redis.service
 
 [Service]
-EnvironmentFile=%h/.config/meeting-recorder.env
-WorkingDirectory=%h/meeting-recorder
-ExecStart=%h/meeting-recorder/.venv/bin/celery -A config worker -l info --concurrency 1
+Type=simple
+EnvironmentFile=@@ENV_FILE@@
+WorkingDirectory=@@APP_DIR@@
+ExecStart=@@APP_DIR@@/.venv/bin/celery -A config worker -l info --concurrency 1
 Restart=on-failure
 RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=@@APP_DIR@@
 
 [Install]
 WantedBy=default.target

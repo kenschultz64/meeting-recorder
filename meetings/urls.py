@@ -8,6 +8,7 @@ urlpatterns = [
     path("", views.meeting_list, name="meeting_list"),
     path("accounts/password/", change_password, name="change_password"),
     path("meetings/new/", views.meeting_new, name="meeting_new"),
+    path("meetings/<int:pk>/recover/", views.recover_live, name="recover_live"),
     path("users/", views.user_list, name="user_list"),
     path("users/create/", views.user_create, name="user_create"),
     path("users/<int:pk>/password/", views.user_set_password, name="user_set_password"),

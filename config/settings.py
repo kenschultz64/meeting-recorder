@@ -9,8 +9,12 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.environ.get("SECRET_KEY", "REMOVED-PRODUCTION-SECRET")
 DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
+SECRET_KEY = os.environ.get("SECRET_KEY", "")
+if not SECRET_KEY:
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured("SECRET_KEY must be set in the environment")
+
 ALLOWED_HOSTS = [h.strip() for h in os.environ.get(
     "ALLOWED_HOSTS", "localhost,127.0.0.1,testserver").split(",") if h.strip()]
 CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.environ.get(
@@ -113,12 +117,19 @@ GOG_BIN = os.environ.get("GOG_BIN", "gog")
 DATA_UPLOAD_MAX_MEMORY_SIZE = 512 * 1024 * 1024
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
 
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SECURE = True
+SECURE_COOKIES = os.environ.get("DJANGO_SECURE_COOKIES", "1" if not DEBUG else "0") == "1"
+SESSION_COOKIE_SECURE = SECURE_COOKIES
+CSRF_COOKIE_SECURE = SECURE_COOKIES
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
+CSRF_COOKIE_SAMESITE = "Lax"
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = "same-origin"
+X_FRAME_OPTIONS = "DENY"
 
+if os.environ.get("TRUST_X_FORWARDED_PROTO", "0") == "1":
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
-# Refuse to run a public deployment on the development placeholder key.
-if not DEBUG and SECRET_KEY.startswith("dev-only-insecure-key"):
-    import warnings
-    warnings.warn("SECRET_KEY is still the development placeholder - set it in the environment!",
-                  RuntimeWarning, stacklevel=1)
+if not DEBUG and (len(SECRET_KEY) < 40 or "insecure" in SECRET_KEY.lower() or "removed" in SECRET_KEY.lower()):
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured("SECRET_KEY is missing or uses an unsafe placeholder")

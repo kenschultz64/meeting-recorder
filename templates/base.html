@@ -4,6 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}GoGospelNow.com Meeting Recorder{% endblock %}</title>
+  <script>
+  // Theme: the saved choice wins, otherwise follow the OS. Runs before the
+  // stylesheet so a dark-mode device never flashes white.
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem('mr-theme'); } catch (e) {}
+    if (t !== 'dark' && t !== 'light') {
+      t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+    }
+    document.documentElement.setAttribute('data-bs-theme', t);
+  })();
+  </script>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
     .speaker-0 { color: #0d6efd; } .speaker-1 { color: #198754; }
@@ -11,15 +23,42 @@
     .speaker-4 { color: #fd7e14; } .speaker-5 { color: #20c997; }
     .speaker-6 { color: #6610f2; } .speaker-7 { color: #d63384; }
     .seg { margin-bottom: .4rem; }
-    .ts { font-size: .75rem; color: #6c757d; cursor: pointer; }
+    .ts { font-size: .75rem; color: var(--bs-secondary-color); cursor: pointer; }
+    /* Speaker colours need lighter tints to stay legible on a dark surface. */
+    [data-bs-theme="dark"] .speaker-0 { color: #6ea8fe; }
+    [data-bs-theme="dark"] .speaker-1 { color: #75b798; }
+    [data-bs-theme="dark"] .speaker-2 { color: #ea868f; }
+    [data-bs-theme="dark"] .speaker-3 { color: #a98eda; }
+    [data-bs-theme="dark"] .speaker-4 { color: #feb272; }
+    [data-bs-theme="dark"] .speaker-5 { color: #79dfc1; }
+    [data-bs-theme="dark"] .speaker-6 { color: #b197fc; }
+    [data-bs-theme="dark"] .speaker-7 { color: #e685b5; }
+    /* Bootstrap dark puts cards on the same #212529 as the page; lift them so
+       panels read as surfaces, and lift the tertiary blocks above the card. */
+    [data-bs-theme="dark"] .card { --bs-card-bg: #2b3035; border-color: rgba(255, 255, 255, .15); }
+    [data-bs-theme="dark"] .card-header,
+    [data-bs-theme="dark"] .card-footer { border-color: rgba(255, 255, 255, .15); }
+    [data-bs-theme="dark"] .list-group {
+      --bs-list-group-bg: #2b3035;
+      --bs-list-group-border-color: rgba(255, 255, 255, .15);
+    }
+        /* .bg-body-tertiary resolves through the RGB triplet in 5.3.3, so set both. */
+    [data-bs-theme="dark"] .bg-body-tertiary {
+      --bs-tertiary-bg: #343a40; --bs-tertiary-bg-rgb: 52, 58, 64;
+    }
+    [data-bs-theme="dark"] .navbar.bg-dark { border-bottom: 1px solid rgba(255, 255, 255, .15); }
+    [data-bs-theme="dark"] table.table { --bs-table-bg: transparent; }
+    .btn.busy { cursor: progress; }
+    .btn.busy .spinner-border { width: .85em; height: .85em; border-width: .17em; }
   </style>
 </head>
-<body class="bg-light">
+<body>
 <nav class="navbar navbar-dark bg-dark mb-4">
   <div class="container">
-    <span class="navbar-brand">🎙️ GoGospelNow.com Meeting Recorder</span>
+    <a class="navbar-brand" href="{% url 'meeting_list' %}">🎙️ GoGospelNow.com Meeting Recorder</a>
     <div class="d-flex gap-3 text-white-50 small">
       {% if user.is_authenticated %}
+        <a class="btn btn-sm btn-outline-light" href="{% url 'meeting_list' %}">My meetings</a>
         <a class="btn btn-sm btn-outline-light" href="{% url 'meeting_new' %}">New meeting</a>
         {% if user.is_superuser %}<a class="btn btn-sm btn-outline-light" href="{% url 'user_list' %}">Users</a>{% endif %}
         <a class="btn btn-sm btn-outline-light" href="{% url 'docs_guide' %}">📖 Docs</a>
@@ -28,6 +67,8 @@
         <form method="post" action="{% url 'logout' %}" class="d-inline">{% csrf_token %}
           <button class="btn btn-sm btn-link text-white-50">Sign out</button></form>
       {% endif %}
+      <button type="button" id="themeToggle" class="btn btn-sm btn-outline-light"
+              title="Switch to dark mode" aria-label="Toggle dark mode" aria-pressed="false">🌙</button>
     </div>
   </div>
 </nav>
@@ -37,5 +78,65 @@
   {% endfor %}{% endif %}
   {% block content %}{% endblock %}
 </div>
+<script>
+// Click feedback: any element carrying data-busy turns yellow, shows a
+// spinner and its working label the moment it is used, so a slow action
+// (summarize, upload, Drive save) never looks like a dead button.
+function markBusy(el) {
+  if (!el || el.classList.contains('busy')) return;
+  el.dataset.origClass = el.className || '';
+  el.dataset.origHtml = el.innerHTML;
+  el.classList.remove('btn-primary', 'btn-success', 'btn-outline-primary',
+                      'btn-outline-success', 'btn-outline-secondary');
+  el.classList.add('busy', 'btn-warning');
+  el.innerHTML = (el.dataset.busy || 'Working…') +
+    '<span class="spinner-border spinner-border-sm ms-2" role="status" aria-hidden="true"></span>';
+  if (el.tagName === 'A') {
+    el.style.pointerEvents = 'none';
+    el.setAttribute('aria-disabled', 'true');
+  } else {
+    el.disabled = true;
+  }
+}
+function clearBusy(el) {
+  if (!el.classList.contains('busy')) return;
+  el.className = el.dataset.origClass || '';
+  el.innerHTML = el.dataset.origHtml || '';
+  el.style.pointerEvents = '';
+  el.removeAttribute('aria-disabled');
+  el.disabled = false;
+}
+document.addEventListener('click', function (e) {
+  const link = e.target.closest('a[data-busy]');
+  if (link) markBusy(link);
+});
+document.addEventListener('submit', function (e) {
+  const btn = e.target.querySelector('[data-busy]');
+  if (btn) markBusy(btn);
+});
+// Dark mode: flip data-bs-theme, remember the choice, refresh the glyph.
+(function () {
+  const btn = document.getElementById('themeToggle');
+  if (!btn) return;
+  function paint() {
+    const dark = document.documentElement.getAttribute('data-bs-theme') === 'dark';
+    btn.textContent = dark ? '☀️' : '🌙';
+    btn.title = dark ? 'Switch to light mode' : 'Switch to dark mode';
+    btn.setAttribute('aria-label', btn.title);
+    btn.setAttribute('aria-pressed', dark ? 'true' : 'false');
+  }
+  btn.addEventListener('click', function () {
+    const next = document.documentElement.getAttribute('data-bs-theme') === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-bs-theme', next);
+    try { localStorage.setItem('mr-theme', next); } catch (e) {}
+    paint();
+  });
+  paint();
+})();
+// Coming back with the Back button must not restore a stuck spinner.
+window.addEventListener('pageshow', function (e) {
+  if (e.persisted) document.querySelectorAll('.busy').forEach(clearBusy);
+});
+</script>
 </body>
 </html>

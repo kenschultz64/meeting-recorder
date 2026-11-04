@@ -1,7 +1,6 @@
-# Speaker separation (runs inside the Celery worker, CPU-only).
-# Heavy: NeMo pulls torch + the audio stack. Install only where diarization runs.
-# The shipped deployment runs NeMo built from git (3.1.0+218d0b443) with CPU torch.
-nemo_toolkit[asr]==3.1.0
-torch==2.14.1
+# Speaker separation (CPU-only in the reference installation).
+# Install CPU PyTorch first; INSTALL.md contains the exact command.
+# This NeMo revision is the one verified with Nemotron-3-Diarization.
+nemo_toolkit[asr] @ git+https://github.com/NVIDIA/NeMo.git@218d0b443441b7d8aa1c832f47df310f186cf0a4
 numpy==2.2.6
 soundfile==0.14.0

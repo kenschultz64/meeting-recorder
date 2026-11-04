@@ -1,4 +1,4 @@
-"""LLM summarization via cw2 Flash-Next with cwbrain5 vLLM fallback."""
+"""Summarize meeting transcripts through OpenAI-compatible LLM endpoints."""
 import requests
 from django.conf import settings
 

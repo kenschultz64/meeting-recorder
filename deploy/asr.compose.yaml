@@ -1,0 +1,25 @@
+# Optional local ASR service for the Meeting Recorder.
+# Runtime: parakeet.cpp (MIT); model: NVIDIA Parakeet TDT 0.6B v3 (CC-BY-4.0).
+services:
+  parakeet-asr:
+    image: ghcr.io/mudler/parakeet.cpp-server@sha256:39330bee7ee6ee5045617f32b027c200616d5fb222d5c04dffa0c2b34105ffcb
+    container_name: meeting-recorder-parakeet
+    command: ["--model", "tdt-0.6b-v3", "--port", "8080", "--threads", "4"]
+    environment:
+      XDG_CACHE_HOME: /models
+    ports:
+      - "127.0.0.1:18771:8080"
+    volumes:
+      - parakeet-models:/models
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=2g
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: 8g
+
+volumes:
+  parakeet-models:

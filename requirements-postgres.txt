@@ -1,0 +1,2 @@
+# Optional PostgreSQL adapter. SQLite remains the default.
+psycopg[binary]==3.3.8

@@ -1,129 +1,112 @@
-# DEPLOY.md — production install
+# Production deployment and operations
 
-Written from the working deployment on `cw2` (Pop!_OS, Tailscale + Cloudflare tunnel). Substitute your
-own hostnames, ports and paths.
+Start with [INSTALL.md](INSTALL.md). This document covers the production boundary after the installer has created the app, database, environment file, and user services.
 
-## 0. Prerequisites
+## Deployment layout
 
-| Need | Why | Example |
-|---|---|---|
-| Python 3.10+ | Django 5.2 / Celery 5.6 | `python3 -m venv .venv` |
-| Redis | Celery broker + result backend | `deploy/redis.compose.yaml` (bound to loopback) |
-| ffmpeg + ffprobe | normalize audio, probe duration | `apt install ffmpeg` |
-| Parakeet ASR service | speech-to-text over HTTP | loopback port, e.g. `127.0.0.1:18771` |
-| OpenAI-compatible LLM | summaries | any `/v1` endpoint |
-| NeMo + CPU torch | in-process diarization | `requirements-diarization.txt` |
+- Gunicorn/Django: `127.0.0.1:18780`
+- Private Redis: `127.0.0.1:6390`
+- Optional Parakeet ASR: `127.0.0.1:18771`
+- Celery worker: local process, concurrency 1 by default
+- Configuration: `~/.config/meeting-recorder.env` (`0600`)
+- SQLite database: `db.sqlite3`; recordings and recoverable chunks: `media/`
 
-## 1. Install
+Only an HTTPS reverse proxy or tunnel should be network-accessible. Never publish Redis or the ASR endpoint to the internet.
 
-```bash
-sudo mkdir -p /opt/meeting-recorder && sudo chown "$USER" /opt/meeting-recorder
-rsync -a ./ /opt/meeting-recorder/
-cd /opt/meeting-recorder
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-diarization.txt
-cp .env.example .env && chmod 600 .env      # then edit it
-set -a; . ./.env; set +a
-.venv/bin/python manage.py migrate
-.venv/bin/python manage.py shell -c "from django.contrib.auth.models import User; User.objects.create_superuser('you','you@example.com', input('password: '))"
+## Required production configuration
+
+```text
+SECRET_KEY=<long random value; never commit it>
+DJANGO_DEBUG=0
+DJANGO_SECURE_COOKIES=1
+TRUST_X_FORWARDED_PROTO=1
+ALLOWED_HOSTS=localhost,127.0.0.1,meeting.example.org
+CSRF_TRUSTED_ORIGINS=https://meeting.example.org
+PARAKEET_URL=http://127.0.0.1:18771/v1/audio/transcriptions
 ```
 
-The first account must be created on the command line (there is no public sign-up); everybody else is
-created from the in-app **Users** page by an administrator.
+Use the same `SECRET_KEY` for web and worker services. Rotating it signs out all users. The application refuses to start in production with a missing or obvious placeholder key.
 
-## 2. Secrets
-
-`SECRET_KEY` **must** come from the environment. Never commit a real key and never ship the
-development fallback. Recommended: a mode-0600 env file referenced by the systemd unit.
+Run Django's production checks after every configuration change:
 
 ```bash
-umask 077
-printf 'SECRET_KEY=%s\n' "$(.venv/bin/python -c 'from django.core.management.utils import get_random_secret_key as g;print(g())')" \
-  > ~/.config/meeting-recorder.env
-chmod 600 ~/.config/meeting-recorder.env
+set -a; . ~/.config/meeting-recorder.env; set +a
+.venv/bin/python manage.py check --deploy
 ```
 
-Keep the same value across restarts and across web/worker processes: changing it invalidates every
-session (nobody is locked out permanently, but everyone must sign in again).
+The generated values are shell-safe. If you manually add values containing whitespace or shell metacharacters, quote them correctly for both systemd's `EnvironmentFile` syntax and your shell.
 
-## 3. Systemd user units
+## TLS and reverse proxy
 
-Templates in `deploy/`. Install and enable both:
+Terminate TLS in front of Gunicorn and proxy to `http://127.0.0.1:18780`. Forward the original host and `X-Forwarded-Proto: https`. Do not serve `/media/` as static files: audio authorization is enforced by Django.
 
-```bash
-mkdir -p ~/.config/systemd/user
-cp deploy/meeting-recorder-web.service deploy/meeting-recorder-worker.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now meeting-recorder-web meeting-recorder-worker
-loginctl enable-linger "$USER"     # keep them running after logout and across reboots
-```
+Supported patterns include Caddy/nginx, Tailscale Serve, and Cloudflare Tunnel. Browser recording needs HTTPS. A proxy health check should request `/accounts/login/` and expect HTTP 200.
 
-Both units read `EnvironmentFile=%h/.config/meeting-recorder.env` and should point
-`WorkingDirectory` at the install path. The web unit uses Django's development server, which is fine
-behind a tunnel for a small team but is **not** a hardened public server — for an internet-facing
-deployment put gunicorn (or uvicorn) behind your reverse proxy instead of `runserver`.
-
-Verify:
+## Service management
 
 ```bash
-systemctl --user is-enabled meeting-recorder-web meeting-recorder-worker   # enabled
-systemctl --user is-active  meeting-recorder-web meeting-recorder-worker   # active
-curl -sI http://127.0.0.1:18780/accounts/login/ | head -1                  # HTTP/1.1 200 OK
-```
-
-## 4. Reaching it from outside
-
-Two supported patterns, both terminating TLS in front of the app:
-
-- **Cloudflare tunnel** — a public hostname routed to `http://127.0.0.1:18780`. Set SSL/TLS mode to
-  **Full** (the origin is plain HTTP on loopback), turn on **Always Use HTTPS**, and do not put an
-  Access/WAF challenge in front of the login page.
-- **Tailscale serve** — `tailscale serve --bg --https=8444 http://127.0.0.1:18780`. Use a port that is
-  *different* from the app port, or the proxy and the app fight over the same listener.
-
-Then set, in the env file or settings:
-
-- `ALLOWED_HOSTS` — every hostname the app is reached by.
-- `CSRF_TRUSTED_ORIGINS` — the same origins with scheme, e.g. `https://meeting.example.org`.
-
-A login POST that fails with "Origin checking failed" means these two are wrong; it does not mean the
-proxy is broken.
-
-## 5. Hardening invariants (do not regress these)
-
-- `DEBUG=0` outside development.
-- `/media/...` must go through the owner-only `private_audio` view. Never let the proxy serve
-  `MEDIA_ROOT` statically — that would expose every meeting recording to anyone with a URL.
-- Session and CSRF cookies are `Secure`; the app is only reachable over HTTPS.
-- `X-Robots-Tag: noindex` is set by `meetings/middleware.NoIndexMiddleware`.
-- Django admin stays disabled (`/admin/` → 404); account management lives on the `/users/` page.
-- Meeting ownership is strict: unowned/legacy rows are not listed to anyone.
-
-## 6. Operations
-
-```bash
-# back up database + media
-tar czf ~/mr-backup-$(date +%F).tar.gz -C /opt/meeting-recorder db.sqlite3 media docs
-
-# tail logs
+systemctl --user status meeting-recorder-redis meeting-recorder-web meeting-recorder-worker
 journalctl --user -u meeting-recorder-web -f
 journalctl --user -u meeting-recorder-worker -f
-
-# after ANY code change (units are not auto-reloading)
 systemctl --user restart meeting-recorder-web meeting-recorder-worker
 ```
 
-Health checks worth running after a change:
+The installer enables user lingering so services continue after logout. Verify it with `loginctl show-user "$USER" -p Linger`.
 
-1. `curl -sI https://your-host/accounts/login/` → 200.
-2. Sign in, upload a 1-minute audio file, confirm the meeting reaches **Transcribed**.
-3. Confirm another account gets 404 on that meeting's URL and on `/media/...`.
-4. `python manage.py test meetings` → all tests pass.
+## Security invariants
 
-## 7. Dependencies that commonly bite
+- `DEBUG=0` on any shared or internet-accessible installation.
+- Secure, HttpOnly, SameSite cookies over HTTPS.
+- Exact `ALLOWED_HOSTS` and `CSRF_TRUSTED_ORIGINS`; never use `*`.
+- Gunicorn, Redis, and ASR remain loopback-only.
+- `/media/...` always passes through `private_audio`; another user receives 404.
+- Public sign-up and Django admin remain disabled.
+- The environment file, database, recordings, and backups are never committed.
+- The optional LLM sees meeting transcript text. Use a private endpoint or obtain informed consent before using a third party.
+- Apply operating-system and Python dependency security updates regularly and test before deployment.
 
-- **Diarization** is CPU-heavy: expect roughly the audio duration to be processed at several times
-  real time on a modern desktop CPU. Give the worker `--concurrency 1` on modest hardware.
-- **Parakeet** must be reachable from the worker, not just from your browser.
-- **ffmpeg** must be on the worker's PATH; the pipeline calls `ffmpeg` and `ffprobe` directly.
-- **Google Drive export** needs the `gog` CLI authenticated as the target Workspace user
-  (`GOG_BIN`); without it only that one button fails.
+## Backups
+
+Back up the database and media together while writes are paused or after creating a consistent SQLite copy:
+
+```bash
+mkdir -p "$HOME/meeting-recorder-backups"
+.venv/bin/python - <<'PY'
+import sqlite3
+source = sqlite3.connect('db.sqlite3')
+target = sqlite3.connect('/home/' + __import__('getpass').getuser() + '/meeting-recorder-backups/db.sqlite3')
+source.backup(target)
+target.close(); source.close()
+PY
+tar czf "$HOME/meeting-recorder-backups/media-$(date +%F-%H%M%S).tar.gz" media
+```
+
+Store copies off-host, encrypt backups containing meetings, test restores, and set a retention policy. A code checkout is not a backup of recordings or the database.
+
+## Upgrade
+
+```bash
+git fetch --all --prune
+git pull --ff-only
+.venv/bin/pip install --require-hashes -r requirements.lock
+.venv/bin/python manage.py migrate --noinput
+.venv/bin/python manage.py test meetings
+systemctl --user restart meeting-recorder-web meeting-recorder-worker
+.venv/bin/python scripts/doctor.py
+```
+
+Back up first. Review release notes before changing the pinned NeMo/PyTorch stack or ASR image digest.
+
+## Health verification
+
+1. `scripts/doctor.py` reports Django, Redis, ASR, ffmpeg, and the optional LLM state.
+2. The login page returns HTTP 200 through the HTTPS hostname.
+3. Upload a short audio file and confirm **Transcribed** with speaker labels.
+4. A different ordinary account receives 404 for the meeting and its audio URL.
+5. Generate a summary if an LLM is configured.
+6. Download TXT/Markdown and verify the named speakers.
+7. `python manage.py test meetings` passes.
+
+## Capacity notes
+
+The default Celery worker is deliberately serial. This prevents multiple CPU-heavy diarization jobs from exhausting a modest host, but queued meetings wait for earlier work. SQLite also serializes writes. For a larger installation, benchmark first, move to PostgreSQL, and separate live-preview and full-transcription Celery queues before increasing concurrency.

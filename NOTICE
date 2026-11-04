@@ -14,6 +14,7 @@ Django                     BSD-3-Clause
 Celery                     BSD-3-Clause
 redis-py                   MIT
 requests                   Apache-2.0
+Gunicorn                   MIT
 NeMo Toolkit (ASR extras)  Apache-2.0
 PyTorch                    BSD-3-Clause
 NumPy                      BSD-3-Clause
@@ -37,6 +38,8 @@ External utilities
 ------------------
 ffmpeg / ffprobe           LGPL/GPL depending on the build - invoked as separate
                            programs, not linked into this code.
+parakeet.cpp               MIT - optional local ASR runtime, distributed separately
+                           as a pinned container image.
 gog CLI (optional)         Private utility used for the Google Drive export;
                            not included here. The Drive button simply errors if
                            it is absent.

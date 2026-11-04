@@ -23,6 +23,21 @@
   <div class="alert alert-danger">Failed: {{ m.error }}</div>
 {% endif %}
 
+{% if live %}
+<div class="alert alert-warning">
+  <b>{% if live.active %}A live recording is running for this meeting.{% else %}This recording was never uploaded.{% endif %}</b>
+  {{ live.seconds }} seconds of audio were saved on the server
+  {% if live.active %}(last chunk {{ live.last_age }}s ago){% endif %}.
+  {% if live.active %}
+    If the recording tab is still open, stop and press “Upload &amp; transcribe” there — that keeps the full-quality audio.
+    Otherwise recover what was captured up to the last chunk (~10 seconds are lost):
+  {% endif %}
+  <form method="post" action="{% url 'recover_live' m.pk %}" class="mt-2">{% csrf_token %}
+    <button class="btn btn-sm btn-warning" data-busy="Recovering…">Recover audio &amp; transcribe</button>
+    <a class="btn btn-sm btn-outline-secondary" href="{% url 'meeting_new' %}">Start a new recording</a>
+  </form>
+</div>
+{% endif %}
 {% if speaker_ceiling %}
 <div class="alert alert-warning">
   <b>This recording has {{ diarizer_max }} different voices — the most the speaker separation can tell apart.</b>
@@ -40,7 +55,7 @@
 <input id="name-{{ forloop.counter }}" name="speaker_{{ speaker.key }}" value="{{ speaker.name }}" maxlength="100" class="form-control" style="max-width:280px" placeholder="Person's name">
 {% if m.audio %}<button type="button" class="btn btn-outline-secondary speaker-sample" data-start="{{ speaker.start }}" data-end="{{ speaker.end }}">Play sample</button>{% endif %}
 </div>{% endfor %}
-<button class="btn btn-primary">Save speaker names</button>
+<button class="btn btn-primary" data-busy="Saving names…">Save speaker names</button>
 </form></div></div>
 <div class="card mb-4"><div class="card-header d-flex justify-content-between align-items-center">
   <span>Transcript</span>
@@ -49,7 +64,7 @@
       data-transcript="{{ transcript_json_escaped|default:'' }}">📋 Copy</button>
     <a class="btn btn-outline-secondary" href="{% url 'download_transcript' m.pk 'txt' %}">⬇️ Download .txt</a>
     <a class="btn btn-outline-secondary" href="{% url 'download_transcript' m.pk 'md' %}">⬇️ Download .md</a>
-    <a class="btn btn-success" href="{% url 'send_to_gdrive' m.pk %}">📤 Save to Google Drive</a>
+    <a class="btn btn-success" data-busy="📤 Saving to Drive…" href="{% url 'send_to_gdrive' m.pk %}">📤 Save to Google Drive</a>
   </div>
 </div><div class="card-body" id="transcript">
   {% for s in transcript %}
@@ -60,7 +75,7 @@
 
 <div class="card mb-4"><div class="card-header d-flex justify-content-between">
   <span>Summary</span>
-  <a class="btn btn-sm btn-primary" href="{% url 'do_summary' m.pk %}">✨ Summarize with AI</a>
+  <a class="btn btn-sm btn-primary" data-busy="✨ Summarizing…" href="{% url 'do_summary' m.pk %}">✨ Summarize with AI</a>
 </div><div class="card-body"><pre style="white-space:pre-wrap">{{ m.summary|default:"No summary yet — click Summarize." }}</pre></div></div>
 {% endif %}
 

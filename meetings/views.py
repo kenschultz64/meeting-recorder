@@ -1,15 +1,17 @@
 import re
+import time
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.password_validation import validate_password
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db.models import Q
 from django.http import HttpResponse, JsonResponse
 from pathlib import Path
 from django.shortcuts import get_object_or_404, redirect, render
 
-from . import render as render_mod
+from . import live_store, render as render_mod
 from .llm import summarize_transcript
 from .models import Export, LiveSegment, Meeting, Note
 from .tasks import export_to_gdrive, transcribe_chunk, transcribe_meeting
@@ -23,7 +25,11 @@ def _owned(request, pk):
 
 @login_required
 def meeting_list(request):
-    meetings = Meeting.objects.filter(Q(owner=request.user))
+    meetings = list(Meeting.objects.filter(Q(owner=request.user)))
+    for m in meetings:
+        # A live row has no audio yet; show what was captured so the user can
+        # find a recording whose tab went away.
+        m.live = live_store.state(m.pk) if not m.audio else None
     return render(request, "meetings/list.html", {"meetings": meetings})
 
 
@@ -46,6 +52,7 @@ def meeting_new(request):
             if title:
                 m.title = title
             m.save(update_fields=["audio", "title"])
+            live_store.clear(m.pk)  # final audio supersedes the preview chunks
             transcribe_meeting.delay(m.pk)
             return JsonResponse({"id": m.pk})
         if not audio:
@@ -73,6 +80,7 @@ def meeting_detail(request, pk):
         transcript = render_mod.named_transcript(m.transcript_json)["segments"]
     return render(request, "meetings/detail.html", {
         "m": m, "transcript": transcript, "speakers": speaker_rows(m.transcript_json),
+        "live": live_store.state(m.pk) if not m.audio else None,
         "notes": m.notes.all(), "exports": m.exports.all(),
         # Nemotron-3-Diarization has exactly 8 output channels; a full 8 means a
         # larger meeting may have had voices folded into someone else's label.
@@ -112,6 +120,7 @@ def delete_meeting(request, pk):
             m.audio.delete(save=False)
         except Exception:
             pass
+        live_store.clear(pk)
         m.delete()  # notes/exports/live segments cascade
         messages.success(request, f"Deleted “{title}” (audio, transcript, notes, exports).")
         return redirect("meeting_list")
@@ -140,6 +149,8 @@ def live_chunk(request, pk):
         return JsonResponse({"ok": False,
                              "error": "not an audio container (first bytes: %s)" % head[:8].hex()},
                             status=400)
+    # Keep a copy so an interrupted recording can be rebuilt after the tab dies.
+    live_store.save_chunk(m.pk, seq, data, start)
     transcribe_chunk.delay(m.pk, seq, data, start, start)
     return JsonResponse({"ok": True, "seq": seq})
 
@@ -153,6 +164,39 @@ def live_segments(request, pk):
     data = [{"seq": s.seq, "start": s.start, "end": s.end,
              "speaker": s.speaker, "text": s.text} for s in rows]
     return JsonResponse({"segments": data, "status": m.status, "error": m.error})
+
+
+@login_required
+def recover_live(request, pk):
+    """Rebuild an interrupted live recording from the chunks kept server-side."""
+    from django.core.files.base import ContentFile
+
+    m = _owned(request, pk)
+    if request.method != "POST":
+        return HttpResponse(status=405)
+    if m.audio:
+        messages.info(request, "This meeting already has audio.")
+        return redirect("meeting_detail", m.pk)
+    info = live_store.state(m.pk)
+    if not info:
+        messages.error(request, "No saved audio was found for this meeting.")
+        return redirect("meeting_detail", m.pk)
+    tmp = Path(settings.MEDIA_ROOT) / "live_chunks" / f"recovered-{m.pk}-{int(time.time())}.webm"
+    try:
+        live_store.assemble(m.pk, tmp)
+        m.audio.save(tmp.name, ContentFile(tmp.read_bytes()), save=False)
+        m.status = Meeting.Status.UPLOADED
+        m.error = ""
+        m.save(update_fields=["audio", "status", "error"])
+    except Exception as exc:
+        messages.error(request, f"Could not rebuild the recording: {exc}")
+        return redirect("meeting_detail", m.pk)
+    finally:
+        tmp.unlink(missing_ok=True)
+    live_store.clear(m.pk)
+    transcribe_meeting.delay(m.pk)
+    messages.success(request, f"Recovered about {info['seconds']}s of audio — transcribing now.")
+    return redirect("meeting_detail", m.pk)
 
 
 # ---- user management (admin-created accounts, superuser only) ----

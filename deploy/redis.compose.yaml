@@ -1,9 +1,0 @@
-# Loopback-only Redis for the Celery queue (never publish this to the internet).
-services:
-  redis:
-    image: redis:7-alpine
-    container_name: meeting-recorder-redis
-    command: ["redis-server", "--port", "6390", "--save", ""]
-    ports:
-      - "127.0.0.1:6390:6390"
-    restart: unless-stopped

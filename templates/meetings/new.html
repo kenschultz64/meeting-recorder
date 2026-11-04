@@ -12,8 +12,9 @@
     <input name="audio" type="file" class="form-control" accept="audio/*,video/*" required>
     <div class="form-text">MP3, M4A, WAV, OGG, webm… anything ffmpeg reads. Phone voice memos and Zoom recordings work.</div>
   </div>
-  <div class="mb-3 border rounded p-3 bg-white">
+  <div class="mb-3 border rounded p-3 bg-body-tertiary">
     <label class="form-label fw-bold">🎤 Or record live right now</label>
+    {% include "meetings/mic_setup.html" %}
     <div class="d-flex gap-2 align-items-center mb-2">
       <button type="button" id="recBtn" class="btn btn-danger">● Start recording</button>
       <span id="recStatus" class="text-muted small">Not recording</span>
@@ -21,10 +22,10 @@
     <audio id="recPreview" controls class="w-100 d-none" style="height:36px"></audio>
     <div id="liveBox" class="d-none mt-2">
       <div class="fw-bold small mb-1">Live transcript preview</div>
-      <div id="liveTranscript" class="border rounded bg-white p-2" style="max-height:260px;overflow-y:auto;font-size:.9rem"></div>
+      <div id="liveTranscript" class="border rounded bg-body-tertiary p-2" style="max-height:260px;overflow-y:auto;font-size:.9rem"></div>
     </div>
   </div>
-  <button class="btn btn-primary" id="submitBtn">Upload &amp; transcribe</button>
+  <button class="btn btn-primary" id="submitBtn" data-busy="Uploading…">Upload &amp; transcribe</button>
   <a class="btn btn-outline-secondary" href="{% url 'meeting_list' %}">Cancel</a>
 </form>
 </div></div>
@@ -32,6 +33,7 @@
 <script>
 let mediaRecorder = null, chunks = [], recordedBlob = null;
 let liveMeetingId = null, chunkSeq = 0, pollTimer = null, recStart = 0;
+let recordingActive = false, uploadStarted = false;
 const recBtn = document.getElementById('recBtn');
 const recStatus = document.getElementById('recStatus');
 const recPreview = document.getElementById('recPreview');
@@ -42,8 +44,11 @@ recBtn.addEventListener('click', async () => {
     mediaRecorder.stop();
     return;
   }
+  recBtn.disabled = true;
+  micSetup.lock(true);
+  document.getElementById('submitBtn').disabled = true;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    const stream = await micSetup.capture();
     chunks = [];
     clearInterval(pollTimer);
     liveMeetingId = null; chunkSeq = 0; chunkWarned = false;
@@ -83,12 +88,15 @@ recBtn.addEventListener('click', async () => {
       previewTimer = setTimeout(() => previewRecorder.stop(), 10000);
     }
     mediaRecorder.onstop = () => {
+      recordingActive = false;
       previewRunning = false;
       clearTimeout(previewTimer);
       if (previewRecorder && previewRecorder.state === 'recording') previewRecorder.stop();
-      stream.getTracks().forEach(t => t.stop());
+      micSetup.release();
+      micSetup.lock(false);
       document.getElementById('submitBtn').disabled = false;
       recordedBlob = new Blob(chunks, {type: mime});
+      if (recPreview.src.startsWith('blob:')) URL.revokeObjectURL(recPreview.src);
       recPreview.src = URL.createObjectURL(recordedBlob);
       recPreview.classList.remove('d-none');
       recBtn.textContent = '● Start recording';
@@ -101,6 +109,7 @@ recBtn.addEventListener('click', async () => {
     };
     recStart = Date.now();
     mediaRecorder.start(1000);
+    recordingActive = true;
     previewSegment();
     recBtn.textContent = '■ Stop';
     recBtn.className = 'btn btn-secondary';
@@ -111,7 +120,12 @@ recBtn.addEventListener('click', async () => {
       recStatus.textContent = `🔴 Recording… ${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
     }, 500);
   } catch (err) {
-    recStatus.textContent = 'Mic error: ' + err.message + ' — browser needs HTTPS or localhost for mic access.';
+    micSetup.release();
+    micSetup.lock(false);
+    document.getElementById('submitBtn').disabled = false;
+    recStatus.textContent = micSetup.message(err);
+  } finally {
+    recBtn.disabled = false;
   }
 });
 
@@ -167,14 +181,28 @@ async function pollLive() {
 
 // if a live session is active, the final submit reuses that meeting row instead of creating a new one
 document.getElementById('upForm').addEventListener('submit', async (e) => {
+  uploadStarted = true;
   if (!liveMeetingId) return;
   e.preventDefault();
   const form = e.target;
   const fd = new FormData(form);
   fd.append('final_for', liveMeetingId);
   const r = await fetch('{% url "meeting_new" %}', {method: 'POST', body: fd, headers: {'X-Requested-With': 'XMLHttpRequest'}});
-  if (r.ok) { location.href = `/meetings/${liveMeetingId}/`; }
-  else { form.submit(); }
+  if (r.ok) {
+    const b = document.getElementById('submitBtn');
+    b.innerHTML = 'Transcribing…<span class="spinner-border spinner-border-sm ms-2" role="status" aria-hidden="true"></span>';
+    location.href = `/meetings/${liveMeetingId}/`;
+  } else { form.submit(); }
+});
+// Leaving mid-recording destroys audio that only exists in this tab.
+window.addEventListener('beforeunload', function (e) {
+  if (recordingActive || (recordedBlob && !uploadStarted)) {
+    e.preventDefault();
+    e.returnValue = recordingActive
+      ? 'Recording in progress — leaving this page loses the audio.'
+      : 'You have a recording that has not been uploaded yet.';
+    return e.returnValue;
+  }
 });
 </script>
 {% endblock %}

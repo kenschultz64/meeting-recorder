@@ -1,4 +1,6 @@
 .venv/
+.test-venv/
+.diar-test-venv/
 __pycache__/
 *.pyc
 db.sqlite3

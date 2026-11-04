@@ -10,7 +10,11 @@
   {% for m in meetings %}
     <tr onclick="location.href='{% url 'meeting_detail' m.pk %}'" style="cursor:pointer">
       <td>{{ m.title }}</td>
-      <td>{% if m.status == 'transcribed' %}✅{% elif m.status == 'processing' %}⏳{% elif m.status == 'failed' %}❌{% else %}📤{% endif %} {{ m.get_status_display }}</td>
+      <td>
+        {% if m.live and not m.audio %}
+          {% if m.live.active %}🔴 Recording — {{ m.live.seconds }}s captured{% else %}⚠️ Not uploaded — {{ m.live.seconds }}s recoverable{% endif %}
+        {% else %}{% if m.status == 'transcribed' %}✅{% elif m.status == 'processing' %}⏳{% elif m.status == 'failed' %}❌{% else %}📤{% endif %} {{ m.get_status_display }}{% endif %}
+      </td>
       <td>{% if m.duration_sec %}{{ m.duration_sec|floatformat:0 }}s{% endif %}</td>
       <td>{{ m.created_at|date:"M j, Y H:i" }}</td>
       <td onclick="event.stopPropagation()">
