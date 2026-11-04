@@ -23,6 +23,7 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements.lock
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: python -m pip install --require-hashes --requirement requirements.lock
       - run: python manage.py check
       - run: python manage.py test meetings
